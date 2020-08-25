@@ -1,12 +1,20 @@
 import subprocess
-import requests
-import re
 import logging
+from pathlib import Path, PurePath
+from io import BytesIO
+import datetime
+
+from src import ROOT_DIR
+from tqdm import tqdm, trange
+import requests
 from bs4 import BeautifulSoup
 import zipfile
 import boto3
 from botocore.exceptions import ClientError
-from io import BytesIO
+
+
+def current_time():
+    return datetime.datetime.now().strftime('%Y-%m-%d_%H:%M:%S')
 
 def find_files_website(web_address):
     """
@@ -20,10 +28,23 @@ def find_files_website(web_address):
     for a in soup.find_all('a', href=True):
         if a.text and a['href'].endswith('download=1'):
             links_with_text.append(f'{root_web}{a["href"].rstrip("?download=1")}')
+    logging.info(set(links_with_text))
     return set(links_with_text)
 
 def extract_file_name(file_address):
-    return file_address.split("/")[-1]
+    return str(file_address).split("/")[-1]
+
+def file_path(file_name):
+    return Path("/home/rob/Documents/AWS_DL") / file_name
+
+def extract_parent_name(file_address):
+    """
+    Extract file names and suffix
+    :param file_address: (str) full filename
+    :return: (str) filename, suffix
+    """
+    file_split = str(file_address).split("/")[-1].split(".")
+    return file_split[0], file_split[1]
 
 def download_luna_file(file_address):
     """
@@ -32,7 +53,8 @@ def download_luna_file(file_address):
     :return:
     """
     try:
-        subprocess.run(['./download.sh'], input=file_address)
+        subprocess.run(['./download.sh'], input=str(file_address), text=True)
+        logging.info(f"{file_address} successfully downloaded.")
         return True
     except Exception as e:
         logging.error(e)
@@ -45,7 +67,8 @@ def delete_luna_file(filename):
     :return:
     """
     try:
-        subprocess.run(['./remove.sh'], input=filename)
+        subprocess.run(['./remove.sh'], input=str(filename), text=True)
+        logging.info(f"{filename} successfully deleted.")
     except Exception as e:
         logging.error(e)
         return False
@@ -61,12 +84,13 @@ def upload_file_s3(filename, bucket, object_name=None):
     :return:
     """
     if object_name is None:
-        object_name = extract_file_name(filename)
+        object_name = PurePath(filename).name
 
 
     s3_client = boto3.client('s3')
     try:
-        response = s3_client.upload_file(filename, bucket, f'luna/{object_name}')
+        response = s3_client.upload_file(str(filename), bucket, f'luna/{object_name}')
+        logging.info(f"{response}")
     except ClientError as e:
         logging.error(e)
         return False
@@ -74,6 +98,10 @@ def upload_file_s3(filename, bucket, object_name=None):
 
 
 def get_bucket_names():
+    """
+    Get current bucket names
+    :return:
+    """
     s3 = boto3.client('s3')
     response = s3.list_buckets()
 
@@ -82,56 +110,61 @@ def get_bucket_names():
         print(f' {bucket["Name"]}')
 
 def get_s3_keys(prefix):
+    """
+    Return keys in buckets.
+    :param prefix: (str)
+    :return:
+    """
     s3 = boto3.resource('s3')
     bucket = s3.Bucket('robml')
     for obj in bucket.objects.filter(Prefix=prefix):
         print(obj.key)
 
 
-def unzip_file_s3(filename):
+def unzip_file_s3(filename, parent_name):
     s3_resource = boto3.resource('s3')
     zip_obj = s3_resource.Object(bucket_name='robml', key=f'luna/{filename}')
     buffer = BytesIO(zip_obj.get()["Body"].read())
 
     z = zipfile.ZipFile(buffer)
-    for fname in z.namelist():
+    for fname in tqdm(z.namelist(), total=len(z.namelist()), unit="files"):
         try:
             file_info = z.getinfo(fname)
             s3_resource.meta.client.upload_fileobj(z.open(fname),
                                                 Bucket='robml',
-                                                Key=f'luna/candidates_v2/{fname}'
+                                                Key=f'luna/{parent_name}/{fname}'
                                                 )
+            logging.info(f"{fname} successfully extracted.")
         except ClientError as e:
-            print(e)
+            logging.error(e)
 
 def main():
+    log_path = ROOT_DIR / "logs"
+    logging.basicConfig(filename=f"{log_path / current_time()}.log", level=logging.INFO)
     web_address = ["https://zenodo.org/record/3723295", "https://zenodo.org/record/3723299"]
     files = []
     for address in web_address:
         files.append(find_files_website(address))
     files = [address for sublist in files for address in sublist] # list of files from website
 
-    for file in files:
+    for file in tqdm(files, total=len(files), unit="files"):
+        parent, file_type = extract_parent_name(file)
+        fname = extract_file_name(file)
         #download
         download_luna_file(file)
-
         #upload
+        current_file_loc = file_path(fname)
+        upload_file_s3(current_file_loc, bucket="robml")
         #unzip
+        if file_type == "zip":
+            unzip_file_s3(fname, parent)
         #delete
+        delete_luna_file(current_file_loc)
 
-
-
-    return list(files)
 
 
 if __name__ == "__main__":
-    #unzip_file_s3("candidates_v2.zip")
-    #extract_file_name("https://zenodo.org/record/3723295/files/annotations.csv")
-    #print(find_files_website("https://zenodo.org/record/3723295"))
-    #download_luna_file(b"https://zenodo.org/record/3723295/files/annotations.csv")
-    from pathlib import Path
-    upload_file_s3("/home/rob/Documents/AWS_DL/annotations.csv", bucket="robml")
-    ## TODO check if file ends in zip. If it does then extract. Else continue.
+    main()
 
 
 
