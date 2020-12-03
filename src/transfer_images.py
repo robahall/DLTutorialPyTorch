@@ -153,13 +153,13 @@ def main():
         #download
         download_luna_file(file)
         #upload
-        current_file_loc = file_path(fname)
-        upload_file_s3(current_file_loc, bucket="robml")
+        #current_file_loc = file_path(fname)
+        #upload_file_s3(current_file_loc, bucket="robml")
         #unzip
-        if file_type == "zip":
-            unzip_file_s3(fname, parent)
+        #if file_type == "zip":
+            #unzip_file_s3(fname, parent)
         #delete
-        delete_luna_file(current_file_loc)
+        #delete_luna_file(current_file_loc)
 
 
 

@@ -2,4 +2,4 @@
 
 STDIN=$(cat)
 
-wget $STDIN -P ~/Documents/AWS_DL
+wget $STDIN -P ~/PycharmProjects/DLTutorialPyTorch/data
