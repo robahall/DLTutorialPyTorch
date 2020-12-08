@@ -166,11 +166,8 @@ class LunaDataset(Dataset):
         ], dtype=torch.long
         )
 
-        return (candidate_t,
-                pos_t,
-                CandidateInfoTuple.series_uid,
-                torch.tensor(center_irc)
-                )
+        return candidate_t, pos_t, candidateInfo_tup.series_uid, torch.tensor(center_irc)
+
 
 
 def time_luna(n):
@@ -182,4 +179,6 @@ def time_luna(n):
 
 
 if __name__ == "__main__":
-    print(timeit.timeit("time_luna(1)", setup="from __main__ import time_luna"))
+    print(LunaDataset()[0])
+    #time_luna(1)
+    #print(timeit.timeit("time_luna(1)", setup="from __main__ import time_luna"))
