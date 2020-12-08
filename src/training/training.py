@@ -1,7 +1,7 @@
 import argparse
 import sys
 import os
-import datetime as datetime
+from datetime import datetime
 
 import numpy as np
 
@@ -12,10 +12,10 @@ import torch.nn as nn
 from torch.optim import SGD, Adam
 from torch.utils.data import DataLoader
 
-#from src.util.util import enumerateWithEstimate
+from src.util.util import enumerateWithEstimate
 from src.datasets.datasets import LunaDataset
 from src.util.logconf import logging
-#from src.training.model import LunaModel
+from src.models.model import LunaModel
 
 log = logging.getLogger(__name__)
 # log.setLevel(logging.WARN)
@@ -46,7 +46,7 @@ class LunaTrainingApp:
                             )
         parser.add_argument('--epochs',
                             help='Number of epochs to train for',
-                            defualt=1,
+                            default=1,
                             type=int,
                             )
         parser.add_argument('--tb-prefix',
@@ -56,7 +56,7 @@ class LunaTrainingApp:
         parser.add_argument('comment',
                             help="Comment suffix for TensorBoard run.",
                             nargs='?',
-                            defualt='DLTest'
+                            default='DLTest'
                             )
         self.cli_args = parser.parse_args(sys_argv)
         self.time_str = datetime.strftime(datetime.now(), "%Y%m%d_%H%M%S")
@@ -120,7 +120,7 @@ class LunaTrainingApp:
 
         return val_dl
 
-    def initTensorboardWriter(self):
+    def initTensorboardWriters(self):
         if self.trn_writer is None:
             log_dir = os.path.join('runs', self.cli_args.tb_prefix, self.time_str)
 
@@ -201,6 +201,120 @@ class LunaTrainingApp:
 
         return valMetrics_g.to('cpu')
 
+    def computeBatchLoss(self, batch_ndx, batch_tup, batch_size, metrics_g):
+        input_t, label_t, _series_list, _center_list = batch_tup
+
+        input_g = input_t.to(self.device, non_blocking=True)
+        label_g = label_t.to(self.device, non_blocking=True)
+
+        logits_g, probability_g = self.model(input_g)
+
+        loss_func = nn.CrossEntropyLoss(reduction='none')
+        loss_g = loss_func(logits_g, label_g[:, 1])
+        start_ndx = batch_ndx *batch_size
+        end_ndx = start_ndx + label_t.size(0)
+
+        metrics_g[METRICS_LABEL_NDX, start_ndx:end_ndx] = label_g[:,1].detach()
+        metrics_g[METRICS_PRED_NDX, start_ndx:end_ndx] = probability_g[:,1].detach()
+        metrics_g[METRICS_LOSS_NDX, start_ndx:end_ndx] = loss_g.detach()
+
+        return loss_g.mean()
+
+    def logMetrics(self, epoch_ndx, mode_str, metrics_t, classificationThreshold=0.5):
+        self.initTensorboardWriters()
+        log.info(f"E{epoch_ndx} {type(self).__name__}")
+
+        negLabel_mask = metrics_t[METRICS_LABEL_NDX] <= classificationThreshold
+        negPred_mask = metrics_t[METRICS_PRED_NDX] <= classificationThreshold
+
+        posLabel_mask = ~negLabel_mask
+        posPred_mask = ~negPred_mask
+
+        neg_count = int(negLabel_mask.sum())
+        pos_count = int(posLabel_mask.sum())
+
+        neg_correct = int((negLabel_mask & negPred_mask).sum())
+        pos_correct = int((posLabel_mask & posPred_mask).sum())
+
+        metrics_dict = {}
+        metrics_dict['loss/all'] = \
+            metrics_t[METRICS_LOSS_NDX].mean()
+        metrics_dict['loss/neg'] = \
+            metrics_t[METRICS_LOSS_NDX, negLabel_mask].mean()
+        metrics_dict['loss/pos'] = \
+            metrics_t[METRICS_LOSS_NDX, posLabel_mask].mean()
+
+        metrics_dict['correct/all'] = (pos_correct + neg_correct) \
+            / np.float32(metrics_t.shape[1]) * 100
+        metrics_dict['correct/neg'] = neg_correct / np.float32(neg_count) * 100
+        metrics_dict['correct/pos'] = pos_correct / np.float32(pos_count) * 100
+
+        log.info(
+            ("E{} {:8} {loss/all:.4f} loss, "
+                 + "{correct/all:-5.1f}% correct, "
+            ).format(
+                epoch_ndx,
+                mode_str,
+                **metrics_dict,
+            )
+        )
+        log.info(
+            ("E{} {:8} {loss/neg:.4f} loss, "
+                 + "{correct/neg:-5.1f}% correct ({neg_correct:} of {neg_count:})"
+            ).format(
+                epoch_ndx,
+                mode_str + '_neg',
+                neg_correct=neg_correct,
+                neg_count=neg_count,
+                **metrics_dict,
+            )
+        )
+        log.info(
+            ("E{} {:8} {loss/pos:.4f} loss, "
+                 + "{correct/pos:-5.1f}% correct ({pos_correct:} of {pos_count:})"
+            ).format(
+                epoch_ndx,
+                mode_str + '_pos',
+                pos_correct=pos_correct,
+                pos_count=pos_count,
+                **metrics_dict,
+            )
+        )
+
+        writer = getattr(self, mode_str + '_writer')
+
+        for key, value in metrics_dict.items():
+            writer.add_scalar(key, value, self.totalTrainingSamples_count)
+
+        writer.add_pr_curve(
+            'pr',
+            metrics_t[METRICS_LABEL_NDX],
+            metrics_t[METRICS_PRED_NDX],
+            self.totalTrainingSamples_count,
+        )
+
+        bins = [x/50.0 for x in range(51)]
+
+        negHist_mask = negLabel_mask & (metrics_t[METRICS_PRED_NDX] > 0.01)
+        posHist_mask = posLabel_mask & (metrics_t[METRICS_PRED_NDX] < 0.99)
+
+        if negHist_mask.any():
+            writer.add_histogram(
+                'is_neg',
+                metrics_t[METRICS_PRED_NDX, negHist_mask],
+                self.totalTrainingSamples_count,
+                bins=bins,
+            )
+        if posHist_mask.any():
+            writer.add_histogram(
+                'is_pos',
+                metrics_t[METRICS_PRED_NDX, posHist_mask],
+                self.totalTrainingSamples_count,
+                bins=bins,
+            )
+
+
+
     ## Finish first-pass NN design
 
 
@@ -211,4 +325,4 @@ class LunaTrainingApp:
 
 
 if __name__ == '__main__':
-    LundaTrainingApp().main()
+    LunaTrainingApp().main()
