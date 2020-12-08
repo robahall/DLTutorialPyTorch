@@ -36,12 +36,12 @@ class LunaTrainingApp:
         parser = argparse.ArgumentParser()
         parser.add_argument('--num-workers',
                             help='Number of worker processes for background data loading',
-                            default=8,
+                            default=12,
                             type=int,
                             )
         parser.add_argument('--batch-size',
                             help='Batch size to use for training',
-                            default=32,
+                            default=10,
                             type=int,
                             )
         parser.add_argument('--epochs',
@@ -104,7 +104,7 @@ class LunaTrainingApp:
     def initValDl(self):
         val_ds = LunaDataset(
             val_stride=10,
-            isValSet_bool = True,
+            isValSet_bool=True,
         )
 
         batch_size = self.cli_args.batch_size
@@ -167,7 +167,7 @@ class LunaTrainingApp:
         for batch_ndx, batch_tup in batch_iter:
             self.optimizer.zero_grad()
 
-            loss_var = self.computerBatchLoss(
+            loss_var = self.computeBatchLoss(
                 batch_ndx,
                 batch_tup,
                 train_dl.batch_size,
@@ -196,7 +196,7 @@ class LunaTrainingApp:
                 start_ndx=val_dl.num_workers,
             )
             for batch_ndx, batch_tup in batch_iter:
-                self.computerBatchLoss(
+                self.computeBatchLoss(
                     batch_ndx, batch_tup, val_dl.batch_size, valMetrics_g)
 
         return valMetrics_g.to('cpu')
@@ -211,7 +211,7 @@ class LunaTrainingApp:
 
         loss_func = nn.CrossEntropyLoss(reduction='none')
         loss_g = loss_func(logits_g, label_g[:, 1])
-        start_ndx = batch_ndx *batch_size
+        start_ndx = batch_ndx * batch_size
         end_ndx = start_ndx + label_t.size(0)
 
         metrics_g[METRICS_LABEL_NDX, start_ndx:end_ndx] = label_g[:,1].detach()
