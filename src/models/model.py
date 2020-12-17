@@ -11,12 +11,10 @@ class LunaModel(nn.Module):
         super().__init__()
 
         self.tail_batchnorm = nn.BatchNorm3d(1)
-
         self.block1 = LunaBlock(in_channels, conv_channels)
         self.block2 = LunaBlock(conv_channels, conv_channels*2)
         self.block3 = LunaBlock(conv_channels*2, conv_channels*4)
         self.block4 = LunaBlock(conv_channels*4, conv_channels*8)
-
         self.head_linear = nn.Linear(1152, 2)
         self.head_softmax = nn.Softmax(dim=1)
 
